@@ -36,16 +36,15 @@ def get_filepaths(directory):
 
     return file_paths
 
-#################### ~~~ Realign function ~~~~ #########
-def realign(i):
-    os.system("java -Xmx1G -jar ~/GenomeAnalysisTK.jar --consensusDeterminationModel KNOWNS_ONLY -LOD 0.4 -T IndelRealigner -R "+refGenome+" -targetIntervals "+path+"/realigned/"+refGenome+".intervals -i "+path+"alignedReads/dedup/"+i+".Aligned.sortedByCoord.dedup.out.bam -o "+path+"/realigned/"+i+".realignedBam.bam  -known "+vcfIndel+" >realigned/"+i+".log")
+#################### ~~~ Call variant function ~~~~ #########
+def callVariant(i):
+    if len(ploidyDict)>0:
+        os.system("java -Xmx1G -jar ~/GenomeAnalysisTK.jar -T UnifiedGenotyper -R "+refGenome+" -i "+path+"recalibration/"+i+".recal.bam -o "+path+"/variant/"+i+".raw.vcf  -dbsnp "+vcfSNP+" -stand_call_conf [50.0] -stand_emit_conf 10.0 -L "+bedfile+" -ploidy "+ploidyDict[i]+" >variant/"+i+"raw.log")
+    else:
+        os.system("java -Xmx1G -jar ~/GenomeAnalysisTK.jar -T UnifiedGenotyper -R "+refGenome+" -i "+path+"recalibration/"+i+".recal.bam -o "+path+"/variant/"+i+".raw.vcf  -dbsnp "+vcfSNP+" -stand_call_conf [50.0] -stand_emit_conf 10.0 -L "+bedfile+" >variant/"+i+"raw.log")
     logging.info('target realignement on sample '+i+' done')
 
 
-#################### ~~~ Base recalibration function ~~~~ #########
-def recal(i):
-    os.system("java -Xmx1G -jar ~/GenomeAnalysisTK.jar -T PrintReads -R "+refGenome+" -i "+path+"/realigned/"+i+".realignedBam.bam -o "+path+"/recalibration/"+i+".recal.bam  -BQSR "+path+"recalibration/"+i+"_report.grp")
-    logging.info('target realignement on sample '+i+' done')
 
 ###################### ~~~~ INIT log file ~~~~~ ####################
 logFilename = './' + sys.argv[0].split(".")[0].split('/')[-1]
@@ -72,7 +71,7 @@ logging.info("... READING PARAMETERS FILE")
 
 
 ################ ~~~~ READING PARAMETERS ~~~~ ##################
-##### NEEDED : Working Directory, Reference Genome, VCF indels, VCF snps
+##### NEEDED : Working Directory, Reference Genome, vcfSNP, BED File, Variable ploidy, Ploidy Table (if variable ploidy TRUE)
 
 params_file = sys.argv[1]
 args = {}
@@ -86,10 +85,16 @@ path = args['Working directory'].replace("\\", "")
 logging.info('Working Directory = ' + path)
 refGenome = args['Reference Genome']
 logging.info('Reference Genome = '+refGenome)
-vcfIndel = args['VCF indels']
 vcfSNP = args['VCF snps']
-logging.info('VCF indels ref = '+vcfIndel)
-logging.info('VCF snps ref = '+vcfSNP)
+bedFile=args['BED File']
+ploidy= args['Variable ploidy']
+ploidyDict={}
+if not ploidy=="FALSE":
+    ploidyFile= args['Ploidy Table']
+    for ploidy in ploidyFile:
+        ploidy = ploidy.strip()
+        ploidyTab = ploidy.split("\t")
+        ploidyDict[ploidyTab[0]]=ploidyTab[1]
 
 nsamples = int(args['Number of samples'])
 os.chdir(path)
@@ -108,78 +113,32 @@ for line in sample_names_file:
     sampleNames.append(line.strip())
     logging.info(line.strip())
 
-
-############# ~~~~~ START Realigner ~~~~~ ################
+############# ~~~~~ START variant calling ~~~~~ ################
 logging.info(" ")
 logging.info(" ")
 logging.info("#################################")
-logging.info("... Indel realigner, create target file")
+logging.info("... Variant calling")
 
 ############ ~~~~ create target file ~~~~~ ###############
 ##create output folder (check if it exists)
-make_sure_path_exists(path+"/realigned/")
+make_sure_path_exists(path+"/variant/")
 ##check if target file already exists
-realignmentOut = os.listdir(path+"/realigned/")
-intervalFiles = get_filepaths(path+"/realigned/")
-intervalFiles = [intervalFiles[i] for i, x in enumerate(realignmentOut) if re.findall("\.intervals", x)]
-#sys.exit("Done")
-if len(intervalFiles)>0:
-    os.system("java -Xmx1G -jar ~/GenomeAnalysisTK.jar -T RealignerTargetCreator -R "+refGenome+" -o "+path+"/realigned/"+refGenome+".intervals  -known "+vcfIndel+" >realigned/target_creation.log")
-logging.info("... Finished interval target creation")
-
-
-
-
-####################~~~~  Realign individual sample~~~~~ ########
-logging.info(" ")
-logging.info(" ")
-logging.info("#################################")
-logging.info("... Realignement for each sample")
-make_sure_path_exists(path+"/recalibration/")
-realignOut = os.listdir(path+"/recalibration/")
-realignFiles=get_filepaths(path+"/recalibration")
-realignFiles = [realignFiles[i] for i, x in enumerate(realignOut) if re.findall("realignedBam.bam", x)] # Check if realigned reads files exist
-sampleToRealign=list()
+variantOut = os.listdir(path+"/variant/")
+variantFiles = get_filepaths(path+"/variant/")
+variantFiles = [variantFiles[i] for i, x in enumerate(variantOut) if re.findall("\.vcf", x)]
+sampleToCall=list()
 for sample in sampleNames:
     found=False
-    for files in realignFiles:
+    for files in variantFiles:
         file=files.split(".")[0]
         file2=file.split("/")[-1]
         if sample == file2:
             found=True
     if not found:
         logging.info(sample)
-        sampleToRealign.append(sample)
+        sampleToCall.append(sample)
 
-if len(sampleToRealign)>0:
-    Parallel(n_jobs=8)(delayed(recal)(i) for i in sampleToRealign)
-logging.info("... Finished sample realignment")
+if len(sampleToCall)>0:
+    Parallel(n_jobs=8)(delayed(callVariant)(i) for i in sampleToCall)
+logging.info("... Finished variant calling ")
 logging.info(" ")
-
-################ ~~~~ Base Recalibration ~~~~ #########################
-logging.info(" ")
-logging.info(" ")
-logging.info("#################################")
-logging.info("... Base recalibration")
-# Sort bam files by name
-recalOut = os.listdir(path+"/recalibration/")
-recalFiles=get_filepaths(path+"/recalibration")
-recalFiles = [recalFiles[i] for i, x in enumerate(recalOut) if re.findall("recalBam.bam", x)] # Check if realigned reads files exist
-sampleToRecal=list()
-for sample in sampleNames:
-    found=False
-    for files in recalFiles:
-        file=files.split(".")[0]
-        file2=file.split("/")[-1]
-        if sample == file2:
-            found=True
-    if not found:
-        logging.info(sample)
-        sampleToRecal.append(sample)
-
-if len(sampleToRecal)>0:
-    Parallel(n_jobs=8)(delayed(recal)(i) for i in sampleToRecal)
-logging.info("... Finished sample base recalibration")
-logging.info(" ")
-
-
